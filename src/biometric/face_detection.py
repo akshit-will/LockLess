@@ -14,8 +14,8 @@ try:
 except Exception:  # pragma: no cover - runtime dependency guard
     ort = None  # type: ignore[assignment]
 
-from core.logging import get_logger, PerformanceTimer
-from core.exceptions import FaceDetectionError, ModelLoadError
+from src.core.logging import get_logger, PerformanceTimer
+from src.core.exceptions import FaceDetectionError, ModelLoadError
 
 logger = get_logger(__name__)
 
@@ -416,22 +416,37 @@ class FaceDetector:
         return "haarcascade_frontalface_default.xml"
 
 
-# Example usage and testing
 if __name__ == "__main__":
-    # Test face detection
-    detector = FaceDetector(backend="opencv")  # Use OpenCV for testing
+    detector = FaceDetector(backend="opencv")
 
-    print("Testing face detection...")
+    cap = cv2.VideoCapture(0)
 
-    # Create a test image (in practice, this would come from camera)
-    test_image = np.zeros((480, 640, 3), dtype=np.uint8)
+    if not cap.isOpened():
+        print("Error: Cannot access camera")
+        exit()
 
-    # Test detection
-    faces = detector.detect_faces(test_image)
-    print(f"Detected {len(faces)} faces")
+    print("Press 'q' to exit")
 
-    if faces:
-        largest_face = detector.detect_largest_face(test_image)
-        print(f"Largest face: {largest_face}")
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    print("Face detection test completed!")
+        # Detect faces
+        faces = detector.detect_faces(frame)
+
+        print("Faces detected:", len(faces))
+
+        # Draw boxes
+        for (x, y, w, h) in faces:
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+
+        # SHOW WINDOW 🔥
+        cv2.imshow("Face Detection", frame)
+
+        # Exit on 'q'
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
