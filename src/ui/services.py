@@ -40,7 +40,7 @@ def _load_config(config_path: Optional[str]) -> ConfigManager:
 
 
 def enroll_user_service(
-    user_id: str, password: str, config_path: Optional[str] = None
+    user_id: str, password: str, config_path: Optional[str] = None, frames=None
 ) -> ServiceResponse:
     """Run the biometric enrollment workflow."""
 
@@ -57,7 +57,14 @@ def enroll_user_service(
         )
 
         enrollment = BiometricEnrollment(enrollment_config)
-        result = enrollment.enroll_user(user_id, password)
+
+        # ✅ NEW: If GUI is sending frames
+        if frames is not None:
+            print("✅ Using GUI frames, not opening camera again")
+            result = enrollment.enroll_from_frames(user_id, password, frames)
+        else:
+            # old behavior (CLI mode)
+            result = enrollment.enroll_user(user_id, password)
 
         payload: Dict[str, Any] = {"result": asdict(result)}
         if result.success:
@@ -78,7 +85,7 @@ def enroll_user_service(
 def authenticate_user_service(
     user_id: str,
     password: str,
-    config_path: Optional[str] = None,
+    config_path: Optional[str] = None, frames=None
 ) -> ServiceResponse:
     """Execute authentication for a specific user."""
 
@@ -99,7 +106,12 @@ def authenticate_user_service(
         )
 
         engine = AuthenticationEngine(auth_config)
-        response = engine.authenticate_user(user_id, password)
+        if frames is not None:
+            response = engine.authenticate_user_from_frames(
+                user_id, password, frames
+            )
+        else:
+            response = engine.authenticate_user(user_id, password)
 
         payload: Dict[str, Any] = {"response": asdict(response)}
         if response.success:

@@ -14,8 +14,16 @@ try:
 except Exception:  # pragma: no cover - runtime dependency guard
     ort = None  # type: ignore[assignment]
 
-from src.core.logging import get_logger, PerformanceTimer
-from src.core.exceptions import FaceDetectionError, ModelLoadError
+try:
+    from core.logging import get_logger, PerformanceTimer
+    from core.exceptions import FaceDetectionError, ModelLoadError
+except ModuleNotFoundError:
+    try:
+        from src.core.logging import get_logger, PerformanceTimer
+        from src.core.exceptions import FaceDetectionError, ModelLoadError
+    except ModuleNotFoundError:
+        from LockLess.src.core.logging import get_logger, PerformanceTimer
+        from LockLess.src.core.exceptions import FaceDetectionError, ModelLoadError
 
 logger = get_logger(__name__)
 

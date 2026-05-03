@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 from functools import partial
+from time import time
+import cv2
+from PyQt5.QtWidgets import QScrollArea
+from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QImage, QPixmap
 from typing import Any, Callable, Dict, List, Optional
+from urllib import response
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QPixmap
@@ -26,6 +32,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import cv2
 
 from .services import (
     ServiceResponse,
@@ -47,6 +54,7 @@ class LocklessMainWindow(QMainWindow):
         super().__init__()
         self._config_path = config_path
         self._runners: List[WorkerRunner] = []
+        self.current_frame = None
 
         self.setWindowTitle("Lockless Biometric Suite")
         self.resize(1024, 720)
@@ -66,6 +74,11 @@ class LocklessMainWindow(QMainWindow):
         # Initial data population
         self._populate_system_summary()
         self._refresh_users()
+
+        # Camera setup
+        self.cap = None
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_frame)
 
     # region UI construction -------------------------------------------------
     def _build_dashboard_tab(self) -> None:
@@ -104,14 +117,23 @@ class LocklessMainWindow(QMainWindow):
         self.system_info_box = QGroupBox("System summary")
         self.system_info_form = QFormLayout(self.system_info_box)
         layout.addWidget(self.system_info_box)
+        # 👇 ADD THIS
+        self.camera_label = QLabel()
+        self.camera_label.setFixedHeight(300)
+        self.camera_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.camera_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.camera_label)
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
 
         self.dashboard_camera_button = QPushButton("Test camera")
-        self.dashboard_camera_button.clicked.connect(
-            self._on_dashboard_camera_test)
+        self.dashboard_camera_button.clicked.connect(self.start_camera)
         button_row.addWidget(self.dashboard_camera_button)
+
+        self.stop_camera_button = QPushButton("Stop Camera")
+        self.stop_camera_button.clicked.connect(self.stop_camera)
+        button_row.addWidget(self.stop_camera_button)
 
         self.dashboard_refresh_button = QPushButton("Refresh user list")
         self.dashboard_refresh_button.clicked.connect(self._refresh_users)
@@ -120,7 +142,11 @@ class LocklessMainWindow(QMainWindow):
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
-        self.tabs.addTab(dashboard, "Dashboard")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(dashboard)
+
+        self.tabs.addTab(scroll, "Dashboard")
 
     def _build_enrollment_tab(self) -> None:
         page = QWidget()
@@ -153,6 +179,12 @@ class LocklessMainWindow(QMainWindow):
         form_layout.addRow("Config", config_row)
 
         layout.addWidget(form_box)
+
+        # 👇 ADD THIS
+        self.enroll_camera_label = QLabel()
+        self.enroll_camera_label.setFixedHeight(300)
+        self.enroll_camera_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.enroll_camera_label)
 
         self.enroll_output = QPlainTextEdit()
         self.enroll_output.setReadOnly(True)
@@ -202,6 +234,12 @@ class LocklessMainWindow(QMainWindow):
         form_layout.addRow("Config", config_row)
 
         layout.addWidget(form_box)
+
+        # 👇 ADD THIS
+        self.auth_camera_label = QLabel()
+        self.auth_camera_label.setFixedHeight(300)
+        self.auth_camera_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.auth_camera_label)
 
         self.auth_output = QPlainTextEdit()
         self.auth_output.setReadOnly(True)
@@ -290,21 +328,25 @@ class LocklessMainWindow(QMainWindow):
         self._runners.append(runner)
 
         def _cleanup(payload: Dict[str, Any]) -> None:
-            runner.dispose()
-            if runner in self._runners:
-                self._runners.remove(runner)
-            response = ServiceResponse(**payload)
-            callback(response)
-            if on_complete:
-                on_complete()
+            try:
+                runner.dispose()
+                if runner in self._runners:
+                    self._runners.remove(runner)
+                response = ServiceResponse(**payload)
+                callback(response)
+            finally:
+                if on_complete:
+                    on_complete()
 
         def _handle_failure(message: str) -> None:
-            runner.dispose()
-            if runner in self._runners:
-                self._runners.remove(runner)
-            QMessageBox.critical(self, "Operation failed", message)
-            if on_complete:
-                on_complete()
+            try:
+                runner.dispose()
+                if runner in self._runners:
+                    self._runners.remove(runner)
+                QMessageBox.critical(self, "Operation failed", message)
+            finally:
+                if on_complete:
+                    on_complete()
 
         def _announce_start() -> None:
             self.status_bar.showMessage(f"{description} in progress…")
@@ -332,11 +374,32 @@ class LocklessMainWindow(QMainWindow):
 
         self.enroll_button.setEnabled(False)
         self.enroll_output.clear()
+        self.start_camera()
 
         def task() -> ServiceResponse:
-            return enroll_user_service(user, password, config)
+            import time
+
+            print("🚀 Enrollment started")
+
+            frames = []
+            start_time = time.time()
+
+            while len(frames) < 20:   # capture 20 frames
+                if self.current_frame is not None:
+                    frames.append(self.current_frame.copy())
+                    print("✅ Frame captured")
+
+                else:
+                    print("❌ No frame yet")   # ✅ ADD THIS
+
+                time.sleep(0.1)
+
+            print("🎯 Frames collected, calling service")
+
+            return enroll_user_service(user, password, config, frames=frames)
 
         def on_complete() -> None:
+            self.stop_camera()
             self.enroll_button.setEnabled(True)
             self.status_bar.clearMessage()
             self._refresh_users()
@@ -375,11 +438,24 @@ class LocklessMainWindow(QMainWindow):
 
         self.auth_button.setEnabled(False)
         self.auth_output.clear()
+        self.start_camera()
 
         def task() -> ServiceResponse:
-            return authenticate_user_service(user, password, config)
+            import time
+
+            frames = []
+            start_time = time.time()
+
+            while len(frames) < 15:
+                if self.current_frame is not None:
+                    frames.append(self.current_frame.copy())
+
+                time.sleep(0.1)
+
+            return authenticate_user_service(user, password, config, frames=frames)
 
         def on_complete() -> None:
+            self.stop_camera()
             self.auth_button.setEnabled(True)
             self.status_bar.clearMessage()
 
@@ -449,21 +525,39 @@ class LocklessMainWindow(QMainWindow):
                 self._refresh_users()
 
         self._run_async("Deleting user", task, callback)
-
     def _on_dashboard_camera_test(self) -> None:
         button = self.dashboard_camera_button
         button.setEnabled(False)
 
         def task() -> ServiceResponse:
-            summary = get_system_summary(self._config_path)
-            camera_id = summary.get("camera_id", 0)
-            return test_camera_service(camera_id)
+            import cv2
+
+            cap = cv2.VideoCapture(0)
+
+            if not cap.isOpened():
+                return ServiceResponse(success=False, message="Camera not accessible")
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                cv2.imshow("Camera Preview - Press Q to exit", frame)
+
+                 # Press Q to close camera
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+            cap.release()
+            cv2.destroyAllWindows()
+
+            return ServiceResponse(success=True, message="Camera preview closed")
 
         def callback(response: ServiceResponse) -> None:
             QMessageBox.information(
                 self,
                 "Camera test",
-                response.message,
+                response.message
             )
 
         def on_complete() -> None:
@@ -472,6 +566,71 @@ class LocklessMainWindow(QMainWindow):
 
         self._run_async("Camera test", task, callback, on_complete)
 
+        # ================= CAMERA FUNCTIONS =================
+
+    def start_camera(self):
+            print("📷 Starting camera...")
+            # Always reset previous session first to avoid stale timers/captures.
+            self.stop_camera()
+
+            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not self.cap.isOpened():
+                print("❌ Camera failed to open")
+                self.cap.release()
+                self.cap = None
+                return
+
+            if not self.timer.isActive():
+                self.timer.start(30)
+
+    def update_frame(self):
+        if self.cap is None or not self.cap.isOpened():
+            return
+
+        ret, frame = self.cap.read()
+        if not ret:
+            print("❌ Frame not received")
+            return
+        
+        self.current_frame = frame
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        h, w, ch = rgb.shape
+        bytes_per_line = ch * w
+        qt_img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+
+        pixmap = QPixmap.fromImage(qt_img)
+
+        # Dashboard
+        if hasattr(self, "camera_label"):
+            self.camera_label.setPixmap(pixmap)
+
+        # Enrollment tab
+        if hasattr(self, "enroll_camera_label"):
+            self.enroll_camera_label.setPixmap(pixmap)
+
+        # Authentication tab
+        if hasattr(self, "auth_camera_label"):
+            self.auth_camera_label.setPixmap(pixmap)
+
+    def stop_camera(self):
+        if hasattr(self, "timer") and self.timer.isActive():
+            self.timer.stop()
+
+        if hasattr(self, "cap") and self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        self.current_frame = None
+
+        # Clear all camera views
+        if hasattr(self, "camera_label"):
+            self.camera_label.clear()
+        if hasattr(self, "enroll_camera_label"):
+            self.enroll_camera_label.clear()
+        if hasattr(self, "auth_camera_label"):
+            self.auth_camera_label.clear()
+
     # endregion -------------------------------------------------------------
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
@@ -479,6 +638,7 @@ class LocklessMainWindow(QMainWindow):
             runner.dispose()
         self._runners.clear()
         super().closeEvent(event)
+        self.stop_camera()
 
 
 def run_standalone() -> int:

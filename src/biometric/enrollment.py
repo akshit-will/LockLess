@@ -5,6 +5,9 @@ This module handles the complete enrollment pipeline from camera capture
 to biometric template generation and storage.
 """
 
+from pyexpat import features
+from tempfile import template
+
 import cv2
 import numpy as np
 import time
@@ -235,6 +238,79 @@ class BiometricEnrollment:
         except Exception as e:
             logger.error(f"Camera initialization failed: {e}")
             raise CameraError(f"Failed to initialize camera: {e}")
+        
+    def enroll_from_frames(self, user_id, password, frames):
+        print("📸 Using frames from GUI")
+
+        samples = []
+
+        for frame in frames:
+            faces = self.face_detector.detect_faces(frame)
+
+            if not faces:
+                continue
+
+            # ✅ Get bounding box
+            x, y, w, h = faces[0]
+
+            # ✅ Crop face from frame
+            face_img = frame[y:y+h, x:x+w]
+
+            # Safety check
+            if face_img is None or face_img.size == 0:
+                continue
+
+            # ✅ Quality check (PASS IMAGE)
+            quality_score = self.quality_assessor.assess_quality(face_img)
+
+            if quality_score < self.config.quality_threshold:
+                continue
+
+            # ✅ Feature extraction (PASS IMAGE)
+            from time import time
+
+            features = self.feature_extractor.extract_features(face_img)
+
+            if features is None:
+                continue
+
+            sample = EnrollmentSample(
+                image=face_img,
+                face_bbox=(x, y, w, h),
+                quality_score=quality_score,
+                features=features,
+                timestamp=time()
+            )
+
+            samples.append(sample)
+
+        if len(samples) == 0:
+            return EnrollmentResult(
+                success=False,
+                user_id=user_id,
+                samples_collected=0,
+                error_message="No valid samples collected",
+                processing_time=0.0
+            )
+
+        template = self._generate_template(samples)
+
+        # ✅ correct order
+        self._store_template(user_id, template, password)
+
+        print("✅ Enrollment successful (GUI mode)")
+
+        return EnrollmentResult(
+            success=True,
+            user_id=user_id,
+            template_id=None,
+            samples_collected=len(samples),
+            average_quality=float(
+                np.mean([s.quality_score for s in samples])
+            ),
+            error_message=None,
+            processing_time=0.0
+        )
 
     def _collect_enrollment_samples(self, user_id: str
                                     ) -> List[EnrollmentSample]:

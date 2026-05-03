@@ -39,7 +39,7 @@ liveness:
   enable_depth_analysis: true
   enable_texture_analysis: true
   enable_motion_analysis: true
-  liveness_threshold: 0.5
+  liveness_threshold: 0.2
 
 # Quality assessment thresholds
 quality:

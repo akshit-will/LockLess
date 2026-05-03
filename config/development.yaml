@@ -1,0 +1,18 @@
+# Lockless Configuration
+system:
+  log_level: "DEBUG"  # Use DEBUG for development
+  data_directory: "./data"
+
+camera:
+  device_id: 0  # Change if you have multiple cameras
+
+authentication:
+  similarity_threshold: 0.6  # Lower for testing (normally 0.7)
+  quality_threshold: 0.5     # Lower for testing (normally 0.6)
+
+enrollment:
+  required_samples: 3  # Fewer samples for testing (normally 5)
+  quality_threshold: 0.5
+
+performance:
+  enable_gpu_acceleration: false  # Set to true if you have compatible GPU

@@ -44,11 +44,11 @@ class SpoofingType(Enum):
 @dataclass
 class LivenessConfig:
     """Configuration for liveness detection."""
-    enable_depth_analysis: bool = True
-    enable_texture_analysis: bool = True
+    enable_depth_analysis: bool = False
+    enable_texture_analysis: bool = False
     enable_motion_analysis: bool = True
     enable_challenge_response: bool = False
-    liveness_threshold: float = 0.5
+    liveness_threshold: float = 0.2
     depth_threshold: float = 0.3
     texture_threshold: float = 0.6
     motion_threshold: float = 0.4
@@ -86,7 +86,7 @@ class LivenessDetector:
             config: Liveness detection configuration
         """
         self.config = config or LivenessConfig()
-
+        
         # Frame buffer for temporal analysis
         self.frame_buffer: List[np.ndarray] = []
         self.depth_buffer: List[np.ndarray] = []

@@ -218,6 +218,124 @@ class AuthenticationEngine:
         finally:
             self._cleanup_camera()
 
+    def authenticate_user_from_frames(
+        self, user_id: str, password: str, frames: List[np.ndarray]
+    ) -> AuthenticationResponse:
+        """Authenticate using pre-captured frames (no camera access)."""
+        start_time = time.time()
+
+        try:
+            if not frames:
+                return AuthenticationResponse(
+                    success=False,
+                    user_id=user_id,
+                    result=AuthenticationResult.ERROR,
+                    error_message="No frames provided",
+                )
+
+            if self._is_user_locked_out(user_id):
+                return AuthenticationResponse(
+                    success=False,
+                    user_id=user_id,
+                    result=AuthenticationResult.REJECTED,
+                    error_message="User account temporarily locked",
+                )
+
+            template = self._load_user_template(user_id, password)
+            if template is None:
+                return AuthenticationResponse(
+                    success=False,
+                    user_id=user_id,
+                    result=AuthenticationResult.TEMPLATE_NOT_FOUND,
+                    error_message="User template not found",
+                )
+
+            threshold = self._get_user_threshold(user_id)
+            best_similarity = 0.0
+            best_quality = 0.0
+            best_liveness: Optional[float] = None
+            processed_faces = 0
+
+            for frame in frames:
+                faces = self.face_detector.detect_faces(frame)
+                if not faces:
+                    continue
+
+                face_bbox = max(faces, key=lambda f: f[2] * f[3])
+                x, y, w, h = face_bbox
+                face_image = frame[y:y+h, x:x+w]
+                if face_image.size == 0:
+                    continue
+
+                quality_score = self.quality_assessor.assess_quality(face_image)
+                if quality_score < self.config.quality_threshold:
+                    continue
+
+                liveness_score = None
+                if self.liveness_detector:
+                    liveness_score = self.liveness_detector.detect_liveness(
+                        frame, face_bbox
+                    )
+                    if liveness_score < 0.5:
+                        continue
+
+                features = self.feature_extractor.extract_features(face_image)
+                if features is None:
+                    continue
+
+                processed_faces += 1
+                similarity = self.feature_extractor.compute_similarity(
+                    features, template
+                )
+
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_quality = quality_score
+                    best_liveness = liveness_score
+
+                if similarity >= threshold:
+                    response = AuthenticationResponse(
+                        success=True,
+                        user_id=user_id,
+                        confidence=similarity,
+                        result=AuthenticationResult.SUCCESS,
+                        processing_time=time.time() - start_time,
+                        quality_score=quality_score,
+                        liveness_score=liveness_score,
+                    )
+                    self._update_user_statistics(user_id, True)
+                    return response
+
+            processing_time = time.time() - start_time
+            if processed_faces == 0:
+                result = AuthenticationResult.NO_FACE_DETECTED
+                error_message = "No valid face found in provided frames"
+            else:
+                result = AuthenticationResult.REJECTED
+                error_message = "Authentication threshold not met"
+
+            self._update_user_statistics(user_id, False)
+            return AuthenticationResponse(
+                success=False,
+                user_id=user_id,
+                confidence=best_similarity,
+                result=result,
+                processing_time=processing_time,
+                quality_score=best_quality,
+                liveness_score=best_liveness,
+                error_message=error_message,
+            )
+
+        except Exception as e:
+            logger.error(f"Frame-based authentication failed for user {user_id}: {e}")
+            return AuthenticationResponse(
+                success=False,
+                user_id=user_id,
+                result=AuthenticationResult.ERROR,
+                processing_time=time.time() - start_time,
+                error_message=str(e),
+            )
+
     def authenticate_any_user(self, enrolled_users: List[str],
                               passwords: Dict[str, str],
                               timeout: Optional[float] = None
